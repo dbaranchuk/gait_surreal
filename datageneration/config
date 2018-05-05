@@ -1,0 +1,20 @@
+[SYNTH_DATA]
+tmp_path           = '/home/local/data/cmc/tmp'
+output_path        = '/home/local/data/cmc/synthetic' # output folder
+bg_path            = '/home/local/data/cmc/background/4'
+openexr_py2_path   = "/home/local/tools/OpenEXR/build/lib.linux-x86_64-2.7"
+
+output_types       = {'depth':False, 'fg':False, 'gtflow':False, 'normal':False, 'segm':True, 'vblur':False}
+
+smpl_data_folder   = 'smpl_data'
+smpl_data_filename = 'smpl_data.npz'
+clothing_option    = 'all' # grey, nongrey or all
+
+resy     = 320  # width
+resx     = 240  # height
+stepsize = 1   # subsampling MoCap sequence by selecting every 4th frame
+stride   = 50   # percent overlap between clips 
+clipsize = 4800   # nFrames in each clip, where the random parameters are fixed
+
+
+
