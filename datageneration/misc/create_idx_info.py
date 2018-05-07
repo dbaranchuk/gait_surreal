@@ -63,7 +63,7 @@ for seq in cmu_keys:
     else:
         if firstchunk == "ung":
             firstchunk = name[1]
-		
+    print(name)		
     if firstchunk in split_gait: 
         seq_info.append({"name": seq, "nb_frames": nb_frames})
 		# cast as integer to get subject ID

@@ -14,7 +14,7 @@ resy     = 320  # width
 resx     = 240  # height
 stepsize = 1   # subsampling MoCap sequence by selecting every 4th frame
 stride   = 50   # percent overlap between clips 
-clipsize = 4800   # nFrames in each clip, where the random parameters are fixed
+clipsize = 7000   # nFrames in each clip, where the random parameters are fixed
 
 
 

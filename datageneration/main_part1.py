@@ -360,23 +360,25 @@ def reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene, cam_ob, 
     return(shape)
 
 # load poses and shapes
-def load_body_data(smpl_data, ob, obname, gender='female', idx=0):
+def load_body_data(smpl_data, ob, obname, name, gender='female'):
     # load MoSHed data from CMU Mocap (only the given idx is loaded)
     
     # create a dictionary with key the sequence name and values the pose and trans
-    cmu_keys = []
-    for seq in smpl_data.files:
-        if seq.startswith('pose_'):
-            cmu_keys.append(seq.replace('pose_', ''))
+    #cmu_keys = []
+    #for seq in smpl_data.files:
+    #    if seq.startswith('pose_'):
+    #        cmu_keys.append(seq.replace('pose_', ''))
 
-    name = sorted(cmu_keys)[idx % len(cmu_keys)]
+    #print(sorted(cmu_keys))
+    #name = sorted(cmu_keys)[idx % len(cmu_keys)]
+
     cmu_parms = {}
     for seq in smpl_data.files:
         if seq == ('pose_' + name):
             cmu_parms[seq.replace('pose_', '')] = {'poses':smpl_data[seq],
                                                    'trans':smpl_data[seq.replace('pose_','trans_')]}
 
-    print(len(cmu_parms[name]['poses']))
+    print("nframes: %d" % len(cmu_parms[name]['poses']))
     #print((cmu_parms[name]['trans'] - cmu_parms[name]['trans'][0]).shape)
     #print(np.load("trajectory.npy").shape)
     #cmu_parms[name]['trans'] = -np.load("trajectory.npy")
@@ -435,6 +437,10 @@ def main():
                         help='requested cut, according to the stride')
     parser.add_argument('--stride', type=int,
                         help='stride amount, default 50')
+    parser.add_argument('--direction', type=str,
+                            help='subject direction, default forward')
+    parser.add_argument('--subject_id', type=int,
+                                help='local subject id, default 0')
 
     args = parser.parse_args(sys.argv[sys.argv.index("---") + 1:])
     
@@ -442,12 +448,17 @@ def main():
     name = args.name
     ishape = args.ishape
     stride = args.stride
-    
+    direction = args.direction
+    subject_id = args.subject_id
+
+
     log_message("input idx: %d" % idx)
     log_message("input name: %s" % name)
     log_message("input ishape: %d" % ishape)
     log_message("input stride: %d" % stride)
-    
+    log_message("Subject direction: %s" % direction)
+    log_message("Local subject id: %d" % subject_id)
+
     if idx == None:
         exit(1)
     if ishape == None:
@@ -457,12 +468,10 @@ def main():
         stride = 50
     
     # import idx info (name, split)
-    idx_info = load(open("pkl/old_idx_info.pickle", 'rb'))
+    idx_info = load(open("pkl/idx_info.pickle", 'rb'))
     # get runpass
     (runpass, idx) = divmod(idx, len(idx_info))
     
-    #print(idx_info)
-    #exit()
     log_message("runpass: %d" % runpass)
     log_message("output idx: %d" % idx)
     
@@ -475,7 +484,7 @@ def main():
 
     log_message("sequence: %s" % idx_info['name'])
     log_message("nb_frames: %f" % idx_info['nb_frames'])
-    log_message("use_split: %s" % idx_info['use_split'])
+    #log_message("use_split: %s" % idx_info['use_split'])
 
     # import configuration
     log_message("Importing configuration")
@@ -544,9 +553,9 @@ def main():
     sh_dst = join(sh_dir, 'sh_%02d_%05d.osl' % (runpass, idx))
     os.system('cp spher_harm/sh.osl %s' % sh_dst)
 
-    genders = {0: 'female', 1: 'male'}
+    genders = {0: 'male', 1: 'female'}
     # pick random gender
-    gender = 'female'#'male'#choice(genders)
+    gender = genders[subject_id % 2]#choice(genders)
 
     scene = bpy.data.scenes['Scene']
     scene.render.engine = 'CYCLES'
@@ -555,7 +564,8 @@ def main():
     scene.use_nodes = True
 
     log_message("Listing background images")
-    bg_names = join(bg_path, '%s_img.txt' % idx_info['use_split'])
+    #bg_names = join(bg_path, '%s_img.txt' % idx_info['use_split'])
+    bg_names = join(bg_path, 'bg.txt')
     nh_txt_paths = []
     with open(bg_names) as f:
         for line in f:
@@ -563,7 +573,7 @@ def main():
 
     # grab clothing names
     log_message("clothing: %s" % clothing_option)
-    with open( join(smpl_data_folder, 'textures', '%s_%s.txt' % ( gender, idx_info['use_split'] ) ) ) as f:
+    with open( join(smpl_data_folder, 'textures', '%s_train.txt' % gender) ) as f:
         txt_paths = f.read().splitlines()
 
     # if using only one source of clothing
@@ -573,7 +583,7 @@ def main():
         txt_paths = [k for k in txt_paths if 'nongrey' not in k]
     
     # random clothing texture
-    cloth_img_name = txt_paths[1]#choice(txt_paths)
+    cloth_img_name = txt_paths[subject_id]#choice(txt_paths)
     cloth_img_name = join(smpl_data_folder, cloth_img_name)
     cloth_img = bpy.data.images.load(cloth_img_name)
 
@@ -618,16 +628,14 @@ def main():
         materials = {'FullBody': bpy.data.materials['Material']}
         prob_dressed = {'FullBody': .6}
 
-    direction = 'forward'
     orig_pelvis_loc = None
     random_zrot = 0
-    print(name)
     if direction == 'forward':
         random_zrot = -np.pi/2
         orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.65, -1.15))
     elif direction == 'backward':
         random_zrot = np.pi/2
-        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.65, 2.7))
+        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.65, 2.9))
 
     orig_cam_loc = cam_ob.location.copy()
 
@@ -639,7 +647,7 @@ def main():
         bpy.data.shape_keys["Key"].key_blocks[k].slider_max = 10
 
     log_message("Loading body data")
-    cmu_parms, fshapes, name = load_body_data(smpl_data, ob, obname, idx=idx, gender=gender)
+    cmu_parms, fshapes, name = load_body_data(smpl_data, ob, obname, name, gender=gender)
     
     log_message("Loaded body data for %s" % name)
     
@@ -650,7 +658,7 @@ def main():
     #    fshapes = fshapes[int(nb_fshapes*0.8):]
     
     # pick random real body shape
-    shape = fshapes[1]#choice(fshapes) #+random_shape(.5) can add noise
+    shape = fshapes[subject_id]#choice(fshapes) #+random_shape(.5) can add noise
     #shape = random_shape(3.) # random body shape
     
     # example shapes
