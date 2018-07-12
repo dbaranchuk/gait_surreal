@@ -757,8 +757,7 @@ def main():
     # create a keyframe animation with pose, translation, blendshapes and camera motion
     # LOOP TO CREATE 3D ANIMATION
     mocap_pose, mocap_shape = read_mocap('/home/local/mocap/3d_smpl/samples/model_gt_2d/gait_pretrained_'+str(subject_id)+'.mat')
-    #mocap_pose, mocap_shape = read_mocap('/home/local/mocap/3d_smpl/samples/op/gait_pretrained_'+str(subject_id)+'.mat')
-    #mocap_pose, mocap_shape = read_mocap('/home/local/mocap/3d_smpl/samples/model8/gait_pretrained_'+str(subject_id)+'.mat')
+    #mocap_pose, mocap_shape = read_mocap('/home/local/mocap/3d_smpl/samples/model_reconstruct_2d/gait_pretrained_'+str(subject_id)+'.mat')
     #stepsize = 8
     for seq_frame, (pose, trans) in enumerate(zip(data['poses'][fbegin:fend:stepsize], data['trans'][fbegin:fend:stepsize])):
         iframe = seq_frame
