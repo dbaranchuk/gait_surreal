@@ -4,6 +4,8 @@ import random
 import math
 import bpy
 import numpy as np
+import cv2
+import colorsys
 from os import getenv
 from os import remove
 from os.path import join, dirname, realpath, exists
@@ -13,6 +15,9 @@ from random import choice
 from pickle import load
 from bpy_extras.object_utils import world_to_camera_view as world2cam
 from math import sin, cos
+
+is_visualization = False #True
+is_arbitrary_shape = True
 
 sys.path.insert(0, ".")
 
@@ -284,6 +289,7 @@ def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob
 
     # set the location of the first bone to the translation parameter
     arm_ob.pose.bones[obname+'_Pelvis'].location = trans
+
     if frame is not None:
         arm_ob.pose.bones[obname+'_root'].keyframe_insert('location', frame=frame)
     # set the pose of each bone to the quaternion specified by pose
@@ -306,6 +312,7 @@ def apply_trans_pose_shape(trans, pose, shape, ob, arm_ob, obname, scene, cam_ob
         if frame is not None:
             ob.data.shape_keys.key_blocks['Shape%03d' % ibshape].keyframe_insert('value', index=-1, frame=frame)
 
+
 def get_bone_locs(obname, arm_ob, scene, cam_ob):
     n_bones = 24
     render_scale = scene.render.resolution_percentage / 100
@@ -319,9 +326,7 @@ def get_bone_locs(obname, arm_ob, scene, cam_ob):
         bone = arm_ob.pose.bones[obname+'_'+part_match['bone_%02d' % ibone]]
         co_2d = world2cam(scene, cam_ob, arm_ob.matrix_world * bone.head)
         co_3d = arm_ob.matrix_world * bone.head
-        bone_locations_3d[ibone] = (co_3d.x,
-                                 co_3d.y,
-                                 co_3d.z)
+        bone_locations_3d[ibone] = (co_3d.x, co_3d.y, co_3d.z)
         bone_locations_2d[ibone] = (round(co_2d.x * render_size[0]),
                                  round(co_2d.y * render_size[1]))
     return(bone_locations_2d, bone_locations_3d)
@@ -362,54 +367,18 @@ def reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene, cam_ob, 
 # load poses and shapes
 def load_body_data(smpl_data, ob, obname, name, gender='female'):
     # load MoSHed data from CMU Mocap (only the given idx is loaded)
-    
-    # create a dictionary with key the sequence name and values the pose and trans
-    #cmu_keys = []
-    #for seq in smpl_data.files:
-    #    if seq.startswith('pose_'):
-    #        cmu_keys.append(seq.replace('pose_', ''))
-
-    #print(sorted(cmu_keys))
-    #name = sorted(cmu_keys)[idx % len(cmu_keys)]
-
     cmu_parms = {}
     for seq in smpl_data.files:
         if seq == ('pose_' + name):
             cmu_parms[seq.replace('pose_', '')] = {'poses':smpl_data[seq],
                                                    'trans':smpl_data[seq.replace('pose_','trans_')]}
-
     print("nframes: %d" % len(cmu_parms[name]['poses']))
-    #print((cmu_parms[name]['trans'] - cmu_parms[name]['trans'][0]).shape)
-    #print(np.load("trajectory.npy").shape)
-    #cmu_parms[name]['trans'] = -np.load("trajectory.npy")
-
-    #perm = np.random.permutation(cmu_parms[name]['poses'].shape[0])
-    #cmu_parms[name]['poses'] = cmu_parms[name]['poses'][1000:] #[perm]
-    #cmu_parms[name]['trans'] = (cmu_parms[name]['trans'] - cmu_parms[name]['trans'][0])[1000:] 
-
-    new_poses = []
-    new_trans = []
-    step = 9
-    for i in range(len(cmu_parms[name]['poses'])-1):
-        pose1 = cmu_parms[name]['poses'][i]
-        trans1 = cmu_parms[name]['trans'][i]
-        pose2 = cmu_parms[name]['poses'][i+1]
-        trans2 = cmu_parms[name]['trans'][i+1]
-
-        pose_vector = pose2-pose1
-        trans_vector = trans2-trans1
-        for j in range(step+1):
-            new_poses.append(pose1 + j * pose_vector / step)
-            new_trans.append(trans1 + j * trans_vector / step)
-
-    cmu_parms[name]['poses'] = new_poses
-    cmu_parms[name]['trans'] = new_trans
 
     # compute the number of shape blendshapes in the model
     n_sh_bshapes = len([k for k in ob.data.shape_keys.key_blocks.keys()
                         if k.startswith('Shape')])
     # load all SMPL shapes
-    fshapes = smpl_data['%sshapes' % gender][:, :n_sh_bshapes]    
+    fshapes = smpl_data['%sshapes' % gender][:, :n_sh_bshapes]
     return(cmu_parms, fshapes, name)
 
 import time
@@ -417,6 +386,110 @@ start_time = None
 def log_message(message):
     elapsed_time = time.time() - start_time
     print("[%.2f s] %s" % (elapsed_time, message))
+
+
+def read_mocap(filename):
+    import scipy.io as sio
+    data = sio.loadmat(filename)
+    pose = data['pose'].reshape((data['pose'].shape[0], 72))
+    shape = data['beta'].reshape((data['beta'].shape[0], 10))
+    return pose, shape.mean(0)
+
+
+# Correct z-rotation for half-face view
+def get_zrot(name, direction):
+    zrot = -np.pi/2
+    if name in ['15_01', '26_01', 'ung_74_01', 'ung_113_25']:
+        zrot = np.pi/2
+    elif name in ['ung_77_28', 'ung_82_11', 'ung_82_12', 'ung_104_02', 'ung_136_21', 'ung_139_28', '143_32']:
+        zrot = np.pi
+    elif name == '32_01':
+        zrot = 3*np.pi/4
+
+    if direction == 'backward':
+        zrot += np.pi
+    return zrot 
+
+
+# Cut gaits to remove inappropriate frames 
+def cut_sequence(name, data):
+    if name == '05_01':
+        data['poses'] = data['poses'][:-80]
+        data['trans'] = data['trans'][:-80]
+    elif name == '10_04':
+        data['poses'] = data['poses'][60:]
+        data['trans'] = data['trans'][60:]
+    elif name == '39_01':
+        data['poses'] = data['poses'][:-20]
+        data['trans'] = data['trans'][:-20]
+    elif name == '45_01':
+        data['poses'] = data['poses'][:180]
+        data['trans'] = data['trans'][:180]
+    elif name == 'ung_47_01':
+        data['poses'] = data['poses'][:240]
+        data['trans'] = data['trans'][:240]
+    elif name == 'ung_77_28':
+        data['poses'] = data['poses'][240:840]
+        data['trans'] = data['trans'][240:840]
+    elif name == 'ung_82_11':
+        data['poses'] = data['poses'][240:]
+        data['trans'] = data['trans'][240:]
+    elif name == 'ung_91_57':
+        data['poses'] = data['poses'][250:-250]
+        data['trans'] = data['trans'][250:-250]
+    elif name == 'ung_104_02':
+        data['poses'] = data['poses'][:-240]
+        data['trans'] = data['trans'][:-240]
+    elif name == 'ung_113_25':
+        data['poses'] = data['poses'][:-120]
+        data['trans'] = data['trans'][:-120]
+    elif name == 'ung_120_20':
+        data['poses'] = data['poses'][240:1200]
+        data['trans'] = data['trans'][240:1200]
+    elif name == 'ung_132_18':
+        data['poses'] = data['poses'][120:]
+        data['trans'] = data['trans'][120:]
+    elif name == 'ung_136_21':
+        data['poses'] = data['poses'][60:-60]
+        data['trans'] = data['trans'][60:-60]
+    elif name == 'ung_139_28':
+        data['poses'] = data['poses'][240:960]
+        data['trans'] = data['trans'][240:960]
+    return data
+
+# Draw 2d keypoints
+def draw_skeleton(img_path, joints):
+    left_leg = [1, 4, 7, 10]
+    left_hand = [13, 16, 18, 20, 22]
+    right_leg = [2, 5, 8, 11]
+    right_hand = [14, 17, 19, 21, 23]
+    spine = [0, 3, 6, 9, 12, 15]
+
+    colors = {}
+    for i in left_leg:
+        colors[i] = (0, 255, 255)
+    for i in right_leg:
+        colors[i] = (0, 255, 0)
+    for i in left_hand:
+        colors[i] = (255, 0, 0)
+    for i in right_hand:
+        colors[i] = (0, 0, 255)
+    for i in spine:
+        colors[i] = (128, 128, 0)
+    
+    image=cv2.imread(img_path)
+    mirrowed_joints = np.transpose(joints)
+    mirrowed_joints[:,1] = 240 - mirrowed_joints[:,1] 
+    
+    for i, joint in enumerate(mirrowed_joints): 
+        cv2.circle(image, tuple(joint), 2, colors[i], -1)
+
+    #for i, pair in enumerate(pairs):
+    #    xx = joints[0, [pair[0],pair[1]]]
+    #    yy = joints[1, [pair[0],pair[1]]]
+    #    cv2.line(image, (int(xx[0]), int(yy[0])), 
+    #                    (int(xx[1]), int(yy[1])), colors[i], thickness=2)
+    cv2.imwrite(img_path, image)
 
 
 def main():
@@ -555,7 +628,7 @@ def main():
 
     genders = {0: 'male', 1: 'female'}
     # pick random gender
-    gender = genders[subject_id % 2]#choice(genders)
+    gender = genders[sum(divmod(subject_id, 2))%2] #genders[subject_id % 2]#choice(genders)
 
     scene = bpy.data.scenes['Scene']
     scene.render.engine = 'CYCLES'
@@ -583,7 +656,7 @@ def main():
         txt_paths = [k for k in txt_paths if 'nongrey' not in k]
     
     # random clothing texture
-    cloth_img_name = txt_paths[subject_id]#choice(txt_paths)
+    cloth_img_name = choice(txt_paths) #txt_paths[subject_id]#choice(txt_paths)
     cloth_img_name = join(smpl_data_folder, cloth_img_name)
     cloth_img = bpy.data.images.load(cloth_img_name)
 
@@ -629,16 +702,13 @@ def main():
         prob_dressed = {'FullBody': .6}
 
     orig_pelvis_loc = None
-    random_zrot = 0
+    random_zrot = get_zrot(name, direction)
     if direction == 'forward':
-        random_zrot = -np.pi/2
-        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.65, -1.15))
+        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.75, -1.3))
     elif direction == 'backward':
-        random_zrot = np.pi/2
-        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.65, 2.9))
-
+        orig_pelvis_loc = (arm_ob.matrix_world.copy() * arm_ob.pose.bones[obname+'_Pelvis'].head.copy()) - Vector((-1., 0.75, 3.1))
+    
     orig_cam_loc = cam_ob.location.copy()
-
     print ("CAM LOC:", orig_cam_loc, type(orig_cam_loc))
 
     # unblocking both the pose and the blendshape limits
@@ -658,13 +728,9 @@ def main():
     #    fshapes = fshapes[int(nb_fshapes*0.8):]
     
     # pick random real body shape
-    shape = fshapes[subject_id]#choice(fshapes) #+random_shape(.5) can add noise
+    shape = fshapes[subject_id % nb_fshapes] #+random_shape(.5)#choice(fshapes) #+random_shape(.5) can add noise
     #shape = random_shape(3.) # random body shape
     
-    # example shapes
-    #shape = np.zeros(10) #average
-    #shape = np.array([ 2.25176191, -3.7883464 ,  0.46747496,  3.89178988,  2.20098416,  0.26102114, -3.07428093,  0.55708514, -3.94442258, -2.88552087]) #fat
-
     ndofs = 10
 
     scene.objects.active = arm_ob
@@ -685,7 +751,8 @@ def main():
     rgb_path = join(tmp_path, rgb_dirname)
 
     data = cmu_parms[name]
-    
+    data = cut_sequence(name, data)
+
     fbegin = ishape*stepsize*stride
     fend = min(ishape*stepsize*stride + stepsize*clipsize, len(data['poses']))
     
@@ -731,17 +798,19 @@ def main():
     batch_it = 0
     curr_shape = reset_joint_positions(orig_trans, shape, ob, arm_ob, obname, scene,
                                        cam_ob, smpl_data['regression_verts'], smpl_data['joint_regressor'])
-
- 
     arm_ob.animation_data_clear()
     cam_ob.animation_data_clear()
 
     # create a keyframe animation with pose, translation, blendshapes and camera motion
     # LOOP TO CREATE 3D ANIMATION
     for seq_frame, (pose, trans) in enumerate(zip(data['poses'][fbegin:fend:stepsize], data['trans'][fbegin:fend:stepsize])):
-
         iframe = seq_frame
         scene.frame_set(get_real_frame(seq_frame))
+
+        # Change shape
+        if is_arbitrary_shape and iframe % 2 == 0:
+            shape = choice(fshapes)
+            shape += np.random.normal(0, .1, shape.shape)
 
         # apply the translation, pose and shape to the character
         apply_trans_pose_shape(Vector(trans), pose, shape, ob, arm_ob, obname, scene, cam_ob, get_real_frame(seq_frame))
@@ -789,8 +858,9 @@ def main():
         dict_info['cloth'][iframe] = cloth_img_name
         dict_info['light'][:, iframe] = sh_coeffs
 
+        img_path = join(rgb_path, 'Image%04d.png' % get_real_frame(seq_frame))
         scene.render.use_antialiasing = False
-        scene.render.filepath = join(rgb_path, 'Image%04d.png' % get_real_frame(seq_frame))
+        scene.render.filepath = img_path
 
         log_message("Rendering frame %d" % seq_frame)
         
@@ -809,12 +879,16 @@ def main():
         os.close(1)
         os.dup(old)
         os.close(old)
-
+        
         # bone locations should be saved after rendering so that the bones are updated
         bone_locs_2D, bone_locs_3D = get_bone_locs(obname, arm_ob, scene, cam_ob)
         dict_info['joints2D'][:, :, iframe] = np.transpose(bone_locs_2D)
         dict_info['joints3D'][:, :, iframe] = np.transpose(bone_locs_3D)
 
+        #Draw skeleton
+        if is_visualization:
+            draw_skeleton(img_path, dict_info['joints2D'][:, :, iframe])
+        
         reset_loc = (bone_locs_2D.max(axis=-1) > 256).any() or (bone_locs_2D.min(axis=0) < 0).any()
         arm_ob.pose.bones[obname+'_root'].rotation_quaternion = Quaternion((1, 0, 0, 0))
 
@@ -822,17 +896,17 @@ def main():
     # bpy.ops.wm.save_as_mainfile(filepath=join(tmp_path, 'pre.blend'))
     
     # save RGB data with ffmpeg (if you don't have h264 codec, you can replace with another one and control the quality with something like -q:v 3)
-    cmd_ffmpeg = 'ffmpeg -y -r 30 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 ''%s_c%04d.mp4''' % (join(rgb_path, 'Image%04d.png'), join(output_path, name.replace(' ', '')), (ishape + 1))
+    cmd_ffmpeg = 'ffmpeg -y -r 25 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 ''%s_c%04d.mp4''' % (join(rgb_path, 'Image%04d.png'), join(output_path, name.replace(' ', '')), (ishape + 1))
     log_message("Generating RGB video (%s)" % cmd_ffmpeg)
     os.system(cmd_ffmpeg)
     
     if(output_types['vblur']):
-        cmd_ffmpeg_vblur = 'ffmpeg -y -r 30 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" ''%s_c%04d.mp4''' % (join(res_paths['vblur'], 'Image%04d.png'), join(output_path, name.replace(' ', '')+'_vblur'), (ishape + 1))
+        cmd_ffmpeg_vblur = 'ffmpeg -y -r 25 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" ''%s_c%04d.mp4''' % (join(res_paths['vblur'], 'Image%04d.png'), join(output_path, name.replace(' ', '')+'_vblur'), (ishape + 1))
         log_message("Generating vblur video (%s)" % cmd_ffmpeg_vblur)
         os.system(cmd_ffmpeg_vblur)
    
     if(output_types['fg']):
-        cmd_ffmpeg_fg = 'ffmpeg -y -r 30 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 ''%s_c%04d.mp4''' % (join(res_paths['fg'], 'Image%04d.png'), join(output_path, name.replace(' ', '')+'_fg'), (ishape + 1))
+        cmd_ffmpeg_fg = 'ffmpeg -y -r 25 -i ''%s'' -c:v h264 -pix_fmt yuv420p -crf 23 ''%s_c%04d.mp4''' % (join(res_paths['fg'], 'Image%04d.png'), join(output_path, name.replace(' ', '')+'_fg'), (ishape + 1))
         log_message("Generating fg video (%s)" % cmd_ffmpeg_fg)
         os.system(cmd_ffmpeg_fg)
    

@@ -4,14 +4,7 @@ from os import remove
 from os.path import join, dirname, realpath, exists
 import numpy as np
 
-def load_body_data(smpl_data, idx=0):
-    cmu_keys = []
-    for seq in smpl_data.files:
-        if seq.startswith('pose_'):
-            cmu_keys.append(seq.replace('pose_', ''))
-    
-    name = sorted(cmu_keys)[idx % len(cmu_keys)]
-    
+def load_body_data(smpl_data, name, idx=0):
     cmu_parms = {}
     for seq in smpl_data.files:
         if seq == ('pose_' + name):
@@ -24,6 +17,54 @@ start_time = None
 def log_message(message):
     elapsed_time = time.time() - start_time
     print("[%.2f s] %s" % (elapsed_time, message))
+
+
+# Cut gaits to exclude shit frames (as in main_part1)
+def cut_sequence(name, data):
+    if name == '05_01':
+        data['poses'] = data['poses'][:-80]
+        data['trans'] = data['trans'][:-80]
+    elif name == '39_01':
+        data['poses'] = data['poses'][:-20]
+        data['trans'] = data['trans'][:-20]
+    elif name == '10_04':
+        data['poses'] = data['poses'][60:]
+        data['trans'] = data['trans'][60:]
+    elif name == '45_01':
+        data['poses'] = data['poses'][:180]
+        data['trans'] = data['trans'][:180]
+    elif name == 'ung_47_01':
+        data['poses'] = data['poses'][:240]
+        data['trans'] = data['trans'][:240]
+    elif name == 'ung_77_28':
+        data['poses'] = data['poses'][240:840]
+        data['trans'] = data['trans'][240:840]
+    elif name == 'ung_82_11':
+        data['poses'] = data['poses'][240:]
+        data['trans'] = data['trans'][240:]
+    elif name == 'ung_91_57':
+        data['poses'] = data['poses'][250:-250]
+        data['trans'] = data['trans'][250:-250]
+    elif name == 'ung_104_02':
+        data['poses'] = data['poses'][:-240]
+        data['trans'] = data['trans'][:-240]
+    elif name == 'ung_113_25':
+        data['poses'] = data['poses'][:-120]
+        data['trans'] = data['trans'][:-120]
+    elif name == 'ung_120_20':
+        data['poses'] = data['poses'][240:1200]
+        data['trans'] = data['trans'][240:1200]
+    elif name == 'ung_132_18':
+        data['poses'] = data['poses'][120:]
+        data['trans'] = data['trans'][120:]
+    elif name == 'ung_136_21':
+        data['poses'] = data['poses'][60:-60]
+        data['trans'] = data['trans'][60:-60]
+    elif name == 'ung_139_28':                         
+        data['poses'] = data['poses'][240:960]
+        data['trans'] = data['trans'][240:960]  
+    return data
+
 
 if __name__ == '__main__':
     # time logging
@@ -38,20 +79,33 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate synth dataset images.')
     parser.add_argument('--idx', type=int,
                         help='idx of the requested sequence')
+    parser.add_argument('--name', type=str,
+                        help='name of the requested sequence')
     parser.add_argument('--ishape', type=int,
                         help='requested cut, according to the stride')
     parser.add_argument('--stride', type=int,
                         help='stride amount, default 50')
+    parser.add_argument('--direction', type=str,
+                        help='subject direction, default forward')
+    parser.add_argument('--subject_id', type=int,
+                        help='local subject id, default 0')
 
-    args = parser.parse_args(sys.argv[sys.argv.index("--idx") :])
-    
+    args = parser.parse_args(sys.argv[sys.argv.index("---") + 1:])
+
     idx = args.idx
+    name = args.name
     ishape = args.ishape
     stride = args.stride
-    
+    direction = args.direction
+    subject_id = args.subject_id
+
+
     log_message("input idx: %d" % idx)
+    log_message("input name: %s" % name)
     log_message("input ishape: %d" % ishape)
     log_message("input stride: %d" % stride)
+    log_message("Subject direction: %s" % direction)
+    log_message("Local subject id: %d" % subject_id)
     
     if idx == None:
         exit(1)
@@ -105,12 +159,14 @@ if __name__ == '__main__':
     
     log_message("Loading SMPL data")
     smpl_data = np.load(join(smpl_data_folder, smpl_data_filename))
-    cmu_parms, name = load_body_data(smpl_data, idx)
+    cmu_parms, name = load_body_data(smpl_data, name, idx)
 
     tmp_path = join(tmp_path, 'run%d_%s_c%04d' % (runpass, name.replace(" ", ""), (ishape + 1)))
     res_paths = {k:join(tmp_path, '%05d_%s'%(idx, k)) for k in output_types if output_types[k]}
 
     data = cmu_parms[name]
+    data = cut_sequence(name, data)
+    
     nframes = len(data['poses'][::stepsize])
     output_path = join(output_path, 'run%d' % runpass, name.replace(" ", ""))
     
